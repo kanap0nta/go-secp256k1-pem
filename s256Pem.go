@@ -1,7 +1,6 @@
 package s256_pem
 
 import (
-	"crypto/elliptic"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
@@ -31,9 +30,9 @@ func NewPemPair() ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("creating new S256 private key")
 	}
 
-	privKeyPem, errPrivExp := PrivateKeyToPem(priv)
-	if errPrivExp != nil {
-		return nil, nil, fmt.Errorf("export priv key: %v", errPrivExp)
+	privKeyPem, err := PrivateKeyToPem(priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("export priv key: %v", err)
 	}
 
 	pubKeyPem, err := PublicKeyToPem(priv.PubKey())
@@ -49,14 +48,11 @@ func PrivateKeyToPem(priv *secp256k1.PrivateKey) ([]byte, error) {
 		return nil, fmt.Errorf("input key is nil")
 	}
 
-	key := priv.ToECDSA()
-
-	privateKey := make([]byte, (key.Curve.Params().N.BitLen()+7)/8)
 	privBytes, err := asn1.Marshal(ecPrivateKey{
 		Version:       1,
-		PrivateKey:    key.D.FillBytes(privateKey),
+		PrivateKey:    priv.Serialize(),
 		NamedCurveOID: oid,
-		PublicKey:     asn1.BitString{Bytes: elliptic.Marshal(key.Curve, key.X, key.Y)},
+		PublicKey:     asn1.BitString{Bytes: priv.PubKey().SerializeUncompressed()},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshalling EC private key: %s", err)
@@ -78,7 +74,7 @@ func PemToPrivateKey(priv []byte) (*secp256k1.PrivateKey, error) {
 
 	var privKey ecPrivateKey
 	if _, err := asn1.Unmarshal(block.Bytes, &privKey); err != nil {
-		return nil, fmt.Errorf("x509: failed to parse EC private key: " + err.Error())
+		return nil, fmt.Errorf("x509: failed to parse EC private key: %s", err.Error())
 	}
 	if privKey.Version != 1 {
 		return nil, fmt.Errorf("x509: unknown EC private key version %d", privKey.Version)
@@ -112,32 +108,30 @@ func PublicKeyToPem(pub *secp256k1.PublicKey) ([]byte, error) {
 		return nil, fmt.Errorf("input key is nil")
 	}
 
-	pubEDSA := pub.ToECDSA()
+	publicKeyBytes := pub.SerializeUncompressed()
 
 	var publicKeyAlgorithm pkix.AlgorithmIdentifier
-
-	publicKeyBytes := elliptic.Marshal(pubEDSA.Curve, pubEDSA.X, pubEDSA.Y)
-
 	publicKeyAlgorithm.Algorithm = oid
-	var paramBytes []byte
 	paramBytes, err := asn1.Marshal(oid)
 	if err != nil {
 		return nil, err
 	}
-
 	publicKeyAlgorithm.Parameters.FullBytes = paramBytes
 
-	pubBytes, _ := asn1.Marshal(pkixPublicKey{
+	pubBytes, err := asn1.Marshal(pkixPublicKey{
 		Algo: publicKeyAlgorithm,
 		BitString: asn1.BitString{
 			Bytes:     publicKeyBytes,
 			BitLength: 8 * len(publicKeyBytes),
 		},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshalling EC public key: %s", err)
+	}
 
 	return pem.EncodeToMemory(
 		&pem.Block{
-			Type:  "EC PUBLIC KEY",
+			Type:  "PUBLIC KEY",
 			Bytes: pubBytes,
 		},
 	), nil
